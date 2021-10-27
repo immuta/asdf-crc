@@ -1,63 +1,238 @@
 #!/usr/bin/env bash
-set -e
 
 #
-# https://mirror.openshift.com/pub/openshift-v4/clients/crc/1.12.0/crc-linux-amd64.tar.xz
+# https://mirror.openshift.com/pub/openshift-v4/clients/crc
 #
 
-format_num() {
-    local num=$1
-    local gigabyte=1073741824
-    local megabyte=1048576
-    local kilobyte=1024
+FORCE_DOWNLOAD=1
+CLEANUP=1
 
-    if [[ "${num}" -ge ${gigabyte} ]]; then
-        pretty='GB'
-        unit=${gigabyte}
-    elif [[ "${num}" -ge ${megabyte} ]]; then
-        pretty='MB'
-        unit=${megabyte}
-    elif [[ "${num}" -ge ${kilobyte} ]]; then
-        pretty='KB'
-        unit=${kilobyte}
-    else
-        pretty='B'
-        scaled_num=${num}
-    fi
+TMPDIR="${TMPDIR:-/tmp/}"
 
-    echo "$(dc <<< "2 k ${num} ${unit} / p") $pretty"
+get_platform() {
+    # Usage: get_platform
+
+    local target response
+    target=${OSTYPE:-$(uname -s)} # Fallback to uname only if OSTYPE is unset
+
+    case "${target,,}" in
+        darwin*)
+            response="macos"
+            ;;
+        linux*)
+            response="linux"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    printf '%s' "$response"
 }
 
-install_crc() {
+get_arch() {
+    # Usage: get_arch
+
+    local target response
+    target=${HOSTTYPE:-$MACHTYPE} # Fallback to MACHTYPE then uname if HOSTTYPE is unset
+    target=${target:-$(uname -m)}
+
+    case "${target,,}" in
+        x86_64*)
+            response="amd64" # The mean the same thing. Given how the mirror URLs are structured it simplifies the code if we use 'amd64'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    printf '%s' "$response"
+}
+
+compare_semver() {
+    # Usage: compare_semver <semver1> <semver2>
+
+    local min_version
+
+    # Does sort have option '-V'? This option is only available in GNU Coreutils
+    local response
+    response=$(printf "0" | sort -V)
+    # shellcheck disable=SC2181
+    if [[ $? -eq 0 ]]; then
+        min_version=$(printf '%s\n' "$@" | sort -V | { read -r version; printf '%s\n' "$version"; })
+    else
+        min_version=$(printf '%s\n' "$@" | sed 's/\b\([0-9]\)\b/0\1/g' | sort | sed 's/\b0\([0-9]\)/\1/g' | { read -r version; printf '%s\n' "$version"; })
+    fi
+
+    if [[ "$1" == "$2" ]]; then
+        printf '%s' 0 # $1 version is equal to $2
+    elif [[ "${2}" == "${min_version}" ]]; then
+        printf '%s' 1 # $1 version lower than $2
+    elif [[ "${1}" == "${min_version}" ]]; then
+        printf '%s' -1 # $1 version higher than $2
+    else
+        # There's probably hidden whitespace
+        return 1
+    fi
+}
+
+fetch() {
+    # Usage: fetch <version>
+
+    local install_version="${1:?}"
+
+    local platform
+    platform="$(get_platform)"
+    # shellcheck disable=SC2181
+    if [[ $? -ne 0 ]]; then
+        # printf '%s\n' "Unsupported platform."
+        return 1
+    fi
+
+    local arch
+    arch="$(get_arch)"
+    # shellcheck disable=SC2181
+    if [[ $? -ne 0 ]]; then
+        # printf '%s\n' "Unsupported architecture. Only x86_64 binaries available."
+        return 1
+    fi
+
+    local base_url download_url download_path
+    base_url="https://mirror.openshift.com/pub/openshift-v4/clients/crc"
+    download_url="${base_url}/${install_version}/crc-${platform}-${arch}.tar.xz"
+    download_path="${TMPDIR}crc-${install_version}.tar.xz"
+
+    if [[ "$platform" == "macos" ]]; then
+        local response
+        response=$(compare_semver "1.22.0" "$install_version")
+
+        # crc 1.22.0 is the first version that comes with a .pkg
+        if [[ "$response" -eq -1 ]] || [[ "$response" -eq 0 ]]; then
+            download_url="${download_url%%.tar.xz}.pkg"
+            download_path="${download_path%%.tar.xz}.pkg"
+        fi
+    fi
+
+    if [[ -f "$download_path" ]] && [[ $FORCE_DOWNLOAD -eq 0 ]]; then # Download is cached locally
+        printf '%s' "$download_path"
+        return 0
+    fi
+
+    curl --progress-bar --output "$download_path" "$download_url"
+    # shellcheck disable=SC2181
+    if [[ $? -ne 0 ]]; then
+        # printf '%s\n' "Failed to download '$download_url'. Command 'curl' returned non-zero code."
+        return 1
+    fi
+    printf '%s' "$download_path"
+}
+
+install() {
+    # Usage: install <install_type> <version> <install_path>
+
+    # shellcheck disable=SC2034
     local install_type=$1
     local install_version=$2
     local install_path=$3
 
-    case $(uname -s) in
-    Darwin) os="macos" ;;
-    *) os="linux" ;;
-    esac
-
-    case $(uname -m) in
-    x86_64) arch="amd64" ;;
-    *) arch="other" ;;
-    esac
-
-    if [ "$arch" = "other" ]; then
-        echo "Unsupported architecture $(uname -m). Only x64 binaries are available."
-        exit
+    local archive
+    archive="$(fetch "$install_version")"
+    # shellcheck disable=SC2181
+    if [[ $? -ne 0 ]]; then
+        printf '%s\n' "Function 'download_crc' returned non-zero code"
+        exit 1
     fi
 
-    download="https://mirror.openshift.com/pub/openshift-v4/clients/crc/${install_version}/crc-${os}-amd64.tar.xz"
-
-    if [ ! -d "${install_path}/bin" ]; then
+    if [[ ! -d "${install_path}/bin" ]]; then
+        printf '%s\n' "Creating directory '${install_path}/bin'"
         mkdir -p "${install_path}/bin"
     fi
 
-    file_size=$(curl -sI $download | grep "Content-Length:" | sed 's/Content-Length: //g' | tr -d '[:space:]')
-    echo "This is a large file to download: $(format_num ${file_size})"
+    if [[ "$archive" == *".pkg" ]]; then # Then it's MacOS
+        unpacked_dir=$(mktemp -d)
+        # shellcheck disable=SC2181
+        if [[ $? -ne 0 ]]; then
+            printf '%s\n' "Command 'mktemp' returned non-zero code. Failed to create temporary directory."
+            exit 1
+        fi
 
-    curl -fL# -N "${download}" | tar -x -J -C "${install_path}/bin" --strip-components=1
+        # pkgutil expects the directory to not exist. We let 'mktemp' create the
+        # directory then immediately delete it to ensure there are no filename
+        # collisons. Saver than using option '-u'
+        rm -rf "$unpacked_dir"
+
+        printf '%s\n' "Expanding package '${archive}' to '${unpacked_dir}'"
+
+        # --expand-full is an undocumented option to fully extract the contents of a .pkg
+        pkgutil --expand-full "$archive" "$unpacked_dir"
+        # shellcheck disable=SC2181
+        if [[ $? -ne 0 ]]; then
+            printf '%s\n' "Command 'pkgutil' returned non-zero code. Failed to expand '$archive'."
+            exit 1
+        fi
+
+        local base_dir="${unpacked_dir}/crc.pkg/Payload/Applications/CodeReady Containers.app/Contents/Resources"
+        mv "${base_dir}/crc" "${install_path}/bin/"
+        mv "${base_dir}/qcow-tool" "${install_path}/"
+        mv "${base_dir}/hyperkit" "${install_path}/"
+        mv "${base_dir}/crc-driver-hyperkit" "${install_path}/"
+        mv "${base_dir}/crc-admin-helper-darwin" "${install_path}/"
+        mv "${base_dir}/"*.crcbundle "${install_path}/"
+
+        cat <<- EOF > "${install_path}/bin/crc-fix-symlinks"
+#!/usr/bin/env sh
+
+if [ ! -d "/Applications/CodeReady Containers.app/Contents/Resources" ]; then
+   mkdir -p "/Applications/CodeReady Containers.app/Contents/Resources"
+fi
+
+ln -sfv "${install_path}/crc-driver-hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/crc-driver-hyperkit"
+ln -sfv "${install_path}/hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/hyperkit"
+ln -sfv "${install_path}/crc-admin-helper-darwin" "/Applications/CodeReady Containers.app/Contents/Resources/crc-admin-helper-darwin"
+ln -sfv "${install_path}/qcow-tool" "/Applications/CodeReady Containers.app/Contents/Resources/qcow-tool"
+
+chown root:wheel "/Applications/CodeReady Containers.app/Contents/Resources/"*
+chmod 6755 "${install_path}/hyperkit" "${install_path}/crc-admin-helper-darwin" "${install_path}/crc-driver-hyperkit"
+
+EOF
+
+        chmod +x "${install_path}/bin/crc-fix-symlinks"
+
+        printf '\n%s\n' "To complete the install run the following command:"
+        printf '  %s\n' "sudo crc-fix-symlinks"
+        printf '\n'
+
+        if [[ $CLEANUP -eq 1 ]]; then
+            rm -rf "${unpacked_dir:?}"
+        fi
+    else
+        tar -xf -C "${install_path}/bin" --strip-components=1 "$archive"
+        # shellcheck disable=SC2181
+        if [[ $? -ne 0 ]]; then
+            printf '%s\n' "Failed to extract '$archive'. Command 'tar' returned non-zero code."
+            exit 1
+        fi
+    fi
+
+    if [[ $CLEANUP -eq 1 ]]; then
+        rm -rf "${archive:?}"
+    fi
 }
 
-install_crc $ASDF_INSTALL_TYPE $ASDF_INSTALL_VERSION $ASDF_INSTALL_PATH
+postinstall() {
+    # Usage: postinstall <install_path>
+
+    "${1}"/bin/crc config set consent-telemetry no
+    "${1}"/bin/crc config set autostart-tray false
+    "${1}"/bin/crc config set bundle "${1}/"*.crcbundle
+}
+
+main() {
+    install "$ASDF_INSTALL_TYPE" "$ASDF_INSTALL_VERSION" "$ASDF_INSTALL_PATH"
+    postinstall "$ASDF_INSTALL_PATH"
+
+    exit 0
+}
+
+main "$@"
+

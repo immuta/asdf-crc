@@ -12,10 +12,20 @@ View the [CodeReady Docs](https://code-ready.github.io/crc/) Github Pages for in
 ## Install
 
 ```bash
-asdf plugin add crc https://github.com/sqtran/asdf-crc.git
+asdf plugin add crc https://github.com/immuta/asdf-crc.git
 asdf install crc latest
 ```
 
 ## Use
 
 Check the [asdf](https://github.com/asdf-vm/asdf) README for instructions on how to install and manage versions of CodeReady Containers.
+
+### MacOS
+
+Manually run daemon
+
+```bash
+crc daemon --watchdog
+```
+
+
