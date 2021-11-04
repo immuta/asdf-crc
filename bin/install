@@ -146,6 +146,19 @@ install() {
     if [[ ! -d "${install_path}/bin" ]]; then
         printf '%s\n' "Creating directory '${install_path}/bin'"
         mkdir -p "${install_path}/bin"
+        if [[ $? -ne 0 ]]; then
+            printf '%s\n' "Command 'mkdir' returned non-zero code. Failed to create directory '${install_path}/bin'"
+            exit 1
+        fi
+    fi
+
+    if [[ ! -d "${install_path}/lib" ]]; then
+        printf '%s\n' "Creating directory '${install_path}/lib'"
+        mkdir -p "${install_path}/lib"
+        if [[ $? -ne 0 ]]; then
+            printf '%s\n' "Command 'mkdir' returned non-zero code. Failed to create directory '${install_path}/lib'"
+            exit 1
+        fi
     fi
 
     if [[ "$archive" == *".pkg" ]]; then # Then it's MacOS
@@ -173,33 +186,40 @@ install() {
 
         local base_dir="${unpacked_dir}/crc.pkg/Payload/Applications/CodeReady Containers.app/Contents/Resources"
         mv "${base_dir}/crc" "${install_path}/bin/"
-        mv "${base_dir}/qcow-tool" "${install_path}/"
-        mv "${base_dir}/hyperkit" "${install_path}/"
-        mv "${base_dir}/crc-driver-hyperkit" "${install_path}/"
-        mv "${base_dir}/crc-admin-helper-darwin" "${install_path}/"
-        mv "${base_dir}/"*.crcbundle "${install_path}/"
+        mv "${base_dir}/qcow-tool" "${install_path}/lib/"
+        mv "${base_dir}/hyperkit" "${install_path}/lib/"
+        mv "${base_dir}/crc-driver-hyperkit" "${install_path}/lib/"
+        mv "${base_dir}/crc-admin-helper-darwin" "${install_path}/lib/"
+        mv "${base_dir}/"*.crcbundle "${install_path}/lib/"
 
-        cat <<- EOF > "${install_path}/bin/crc-fix-symlinks"
+        # Hijack ~/.crc
+        # Using an alternative path is currently not supported
+        # https://github.com/code-ready/crc/issues/817
+        mkdir "${install_path}/.crc"
+        ln -sf "${install_path}/.crc" "${HOME}/.crc"
+
+        cat <<- EOF > "${install_path}/bin/crc-asdf-helper-darwin"
 #!/usr/bin/env sh
 
 if [ ! -d "/Applications/CodeReady Containers.app/Contents/Resources" ]; then
    mkdir -p "/Applications/CodeReady Containers.app/Contents/Resources"
 fi
 
-ln -sfv "${install_path}/crc-driver-hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/crc-driver-hyperkit"
-ln -sfv "${install_path}/hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/hyperkit"
-ln -sfv "${install_path}/crc-admin-helper-darwin" "/Applications/CodeReady Containers.app/Contents/Resources/crc-admin-helper-darwin"
-ln -sfv "${install_path}/qcow-tool" "/Applications/CodeReady Containers.app/Contents/Resources/qcow-tool"
+ln -sfv "${install_path}/lib/crc-driver-hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/crc-driver-hyperkit"
+ln -sfv "${install_path}/lib/hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/hyperkit"
+ln -sfv "${install_path}/lib/crc-admin-helper-darwin" "/Applications/CodeReady Containers.app/Contents/Resources/crc-admin-helper-darwin"
+ln -sfv "${install_path}/lib/qcow-tool" "/Applications/CodeReady Containers.app/Contents/Resources/qcow-tool"
+ln -sfv "${install_path}/.crc" "${HOME}/.crc"
 
 chown root:wheel "/Applications/CodeReady Containers.app/Contents/Resources/"*
-chmod 6755 "${install_path}/hyperkit" "${install_path}/crc-admin-helper-darwin" "${install_path}/crc-driver-hyperkit"
+chmod 6755 "${install_path}/lib/hyperkit" "${install_path}/lib/crc-admin-helper-darwin" "${install_path}/lib/crc-driver-hyperkit"
 
 EOF
 
-        chmod +x "${install_path}/bin/crc-fix-symlinks"
+        chmod +x "${install_path}/bin/crc-asdf-helper-darwin"
 
         printf '\n%s\n' "To complete the install run the following command:"
-        printf '  %s\n' "sudo crc-fix-symlinks"
+        printf '  %s\n' "sudo crc-asdf-helper-darwin"
         printf '\n'
 
         if [[ $CLEANUP -eq 1 ]]; then
@@ -224,7 +244,7 @@ postinstall() {
 
     "${1}"/bin/crc config set consent-telemetry no
     "${1}"/bin/crc config set autostart-tray false
-    "${1}"/bin/crc config set bundle "${1}/"*.crcbundle
+    "${1}"/bin/crc config set bundle "${1}/lib/"*.crcbundle
 }
 
 main() {
