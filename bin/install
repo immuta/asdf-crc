@@ -185,41 +185,30 @@ install() {
         fi
 
         local base_dir="${unpacked_dir}/crc.pkg/Payload/Applications/CodeReady Containers.app/Contents/Resources"
-        mv "${base_dir}/crc" "${install_path}/bin/"
+        mv "${base_dir}/crc" "${install_path}/lib/"
         mv "${base_dir}/qcow-tool" "${install_path}/lib/"
         mv "${base_dir}/hyperkit" "${install_path}/lib/"
         mv "${base_dir}/crc-driver-hyperkit" "${install_path}/lib/"
         mv "${base_dir}/crc-admin-helper-darwin" "${install_path}/lib/"
         mv "${base_dir}/"*.crcbundle "${install_path}/lib/"
 
+        # Executable 'crc' is expected to be in the same directory as hyperkit
+        ln -sf "${install_path}/lib/crc" "${install_path}/bin/crc"
+
         # Hijack ~/.crc
         # Using an alternative path is currently not supported
         # https://github.com/code-ready/crc/issues/817
-        mkdir "${install_path}/.crc"
-        ln -sf "${install_path}/.crc" "${HOME}/.crc"
+        if [[ -d "${HOME}/.crc" ]]; then
+            printf 'WARN %s\n' "Directory '${HOME}/.crc' already exists. Moving to '${HOME}/.crc.bak'"
+            mv -f "${HOME}/.crc" "${HOME}/.crc.bak"
+        fi
+        mkdir "${install_path}/config"
+        ln -snf "${install_path}/config" "${HOME}/.crc"
 
-        cat <<- EOF > "${install_path}/bin/crc-asdf-helper-darwin"
-#!/usr/bin/env sh
-
-if [ ! -d "/Applications/CodeReady Containers.app/Contents/Resources" ]; then
-   mkdir -p "/Applications/CodeReady Containers.app/Contents/Resources"
-fi
-
-ln -sfv "${install_path}/lib/crc-driver-hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/crc-driver-hyperkit"
-ln -sfv "${install_path}/lib/hyperkit" "/Applications/CodeReady Containers.app/Contents/Resources/hyperkit"
-ln -sfv "${install_path}/lib/crc-admin-helper-darwin" "/Applications/CodeReady Containers.app/Contents/Resources/crc-admin-helper-darwin"
-ln -sfv "${install_path}/lib/qcow-tool" "/Applications/CodeReady Containers.app/Contents/Resources/qcow-tool"
-ln -sfv "${install_path}/.crc" "${HOME}/.crc"
-
-chown root:wheel "/Applications/CodeReady Containers.app/Contents/Resources/"*
-chmod 6755 "${install_path}/lib/hyperkit" "${install_path}/lib/crc-admin-helper-darwin" "${install_path}/lib/crc-driver-hyperkit"
-
-EOF
-
-        chmod +x "${install_path}/bin/crc-asdf-helper-darwin"
-
-        printf '\n%s\n' "To complete the install run the following command:"
-        printf '  %s\n' "sudo crc-asdf-helper-darwin"
+        # Do what the offical installer does. Otherwise crc-admin-helper-darwin will behave erratically
+        printf '\n%s\n' "To complete the install run the following commands:"
+        printf '  %s\n' "sudo chown 0 ${install_path}/lib/{crc-admin-helper-darwin,crc-driver-hyperkit,hyperkit}"
+        printf '  %s\n' "sudo chmod 6755 ${install_path}/lib/{crc-admin-helper-darwin,crc-driver-hyperkit,hyperkit}"
         printf '\n'
 
         if [[ $CLEANUP -eq 1 ]]; then
